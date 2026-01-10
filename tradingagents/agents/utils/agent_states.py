@@ -5,6 +5,7 @@ from langchain_openai import ChatOpenAI
 from tradingagents.agents import *
 from langgraph.prebuilt import ToolNode
 from langgraph.graph import END, StateGraph, START, MessagesState
+from langgraph.graph.message import add_messages
 
 # 导入统一日志系统
 from tradingagents.utils.logging_init import get_logger
@@ -52,11 +53,19 @@ class RiskDebateState(TypedDict):
 
 
 class AgentState(MessagesState):
-    company_of_interest: Annotated[str, "Company that we are interested in trading"]
+    """全局状态，支持个股分析和指数分析两种模式"""
+    
+    # ========== 通用字段 ==========
+    company_of_interest: Annotated[str, "Company/Index code we are analyzing"]
     trade_date: Annotated[str, "What date we are trading at"]
-
+    market_type: Annotated[str, "Market type (A股, 港股, 美股)"]
     sender: Annotated[str, "Agent that sent this message"]
+    selected_analysts: Annotated[list[str], "List of selected analysts for the current task"]
+    
+    # ========== 路由标识 (新增) ==========
+    is_index: Annotated[bool, "True for index analysis, False for stock analysis"]
 
+    # ========== 个股分析字段 (现有，保持不变) ==========
     # research step
     market_report: Annotated[str, "Report from the Market Analyst"]
     sentiment_report: Annotated[str, "Report from the Social Media Analyst"]
@@ -84,3 +93,38 @@ class AgentState(MessagesState):
         RiskDebateState, "Current state of the debate on evaluating risk"
     ]
     final_trade_decision: Annotated[str, "Final decision made by the Risk Analysts"]
+    
+    # ========== 指数分析字段 (新增) ==========
+    index_info: Annotated[dict, "Index basic info (name, code, market, description)"]
+
+    # 宏观经济分析
+    macro_report: Annotated[str, "Report from Macro Analyst (JSON format with confidence)"]
+    macro_tool_call_count: Annotated[int, "Macro analyst tool call counter"]
+    
+    # 政策分析
+    policy_report: Annotated[str, "Report from Policy Analyst (JSON format with confidence)"]
+    policy_tool_call_count: Annotated[int, "Policy analyst tool call counter"]
+    
+    # 板块轮动分析
+    sector_report: Annotated[str, "Report from Sector Analyst (JSON format with confidence)"]
+    sector_tool_call_count: Annotated[int, "Sector analyst tool call counter"]
+    
+    # 国际新闻分析 (v2.1新增)
+    international_news_report: Annotated[str, "Report from International News Analyst (JSON format with impact strength)"]
+    international_news_tool_call_count: Annotated[int, "International News analyst tool call counter"]
+    international_news_messages: Annotated[list, add_messages]
+    
+    # 技术面分析 (v2.2新增)
+    technical_report: Annotated[str, "Report from Technical Analyst (JSON format with trend signal)"]
+    tech_tool_call_count: Annotated[int, "Technical analyst tool call counter"]
+    technical_messages: Annotated[list, add_messages]
+    
+    # 策略输出
+    strategy_report: Annotated[str, "Final strategy report from Strategy Advisor"]
+    
+    # 会话控制 (v2.2新增)
+    session_type: Annotated[str, "Current session: morning, closing, post"]
+    
+    # ========== 数据源状态管理 (v2.6新增) ==========
+    data_source_status: Annotated[dict, "Status of data sources (True=Available, False=Unavailable)"]
+    data_source_details: Annotated[dict, "Detailed status info including latency and source (cache/api)"]

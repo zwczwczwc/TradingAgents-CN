@@ -273,34 +273,72 @@ async def get_report_detail(
                     return x.isoformat()
                 return x or ""
 
-            stock_symbol = r.get("stock_symbol", r.get("stock_code", tasks_doc.get("stock_code", "")))
-            stock_name = r.get("stock_name")
-            if not stock_name:
-                stock_name = get_stock_name(stock_symbol)
+            if tasks_doc and tasks_doc.get("result"):
+                r = tasks_doc["result"]
+                stock_symbol = r.get("stock_symbol", r.get("stock_code", tasks_doc.get("stock_code", "")))
+                stock_name = r.get("stock_name") or get_stock_name(stock_symbol)
+                
+                # 提取报告内容
+                reports_data = r.get("reports", {})
+                
+                # Debug logging
+                logger.info(f"🔍 [get_report_detail] Task {report_id} reports count: {len(reports_data)}")
+                
+                # 如果 reports 为空或内容不足，尝试从 detailed_analysis 提取（针对指数分析）
+                if not reports_data or len(reports_data) < 2:
+                    detailed = r.get("detailed_analysis", {})
+                    logger.info(f"🔍 [get_report_detail] Trying to extract from detailed_analysis. Keys: {list(detailed.keys())}")
+                    
+                    # 指数分析和多智能体分析的常见报告键
+                    report_keys = [
+                        "macro_report", "policy_report", "sector_report", 
+                        "strategy_report", "research_team_decision",  # Add mapping source
+                        "international_news_report", 
+                        "technical_report", "sentiment_report", "valuation_report",
+                        "risk_analysis", "market_sentiment"
+                    ]
+                    
+                    if reports_data is None:
+                        reports_data = {}
+                        
+                    for key in report_keys:
+                        # 优先从 detailed_analysis 获取
+                        if key in detailed and detailed[key]:
+                            # Map research_team_decision to strategy_report if needed
+                            target_key = "strategy_report" if key == "research_team_decision" else key
+                            # Don't overwrite if strategy_report already exists
+                            if target_key not in reports_data:
+                                reports_data[target_key] = detailed[key]
+                        # 其次从 result 顶层获取
+                        elif key in r and r[key]:
+                            target_key = "strategy_report" if key == "research_team_decision" else key
+                            if target_key not in reports_data:
+                                reports_data[target_key] = r[key]
 
-            report = {
-                "id": tasks_doc.get("task_id", report_id),
-                "analysis_id": r.get("analysis_id", ""),
-                "stock_symbol": stock_symbol,
-                "stock_name": stock_name,  # 🔥 添加股票名称字段
-                "model_info": r.get("model_info", "Unknown"),  # 🔥 添加模型信息字段
-                "analysis_date": r.get("analysis_date", ""),
-                "status": r.get("status", "completed"),
-                "created_at": to_iso(created_at_tz),
-                "updated_at": to_iso(updated_at_tz),
-                "analysts": r.get("analysts", []),
-                "research_depth": r.get("research_depth", 1),
-                "summary": r.get("summary", ""),
-                "reports": r.get("reports", {}),
-                "source": "analysis_tasks",
-                "task_id": tasks_doc.get("task_id", report_id),
-                "recommendation": r.get("recommendation", ""),
-                "confidence_score": r.get("confidence_score", 0.0),
-                "risk_level": r.get("risk_level", "中等"),
-                "key_points": r.get("key_points", []),
-                "execution_time": r.get("execution_time", 0),
-                "tokens_used": r.get("tokens_used", 0)
-            }
+                # 构造兼容的 report 对象
+                report = {
+                    "id": tasks_doc.get("task_id", report_id),
+                    "analysis_id": r.get("analysis_id", ""),
+                    "stock_symbol": stock_symbol,
+                    "stock_name": stock_name,
+                    "model_info": r.get("model_info", "Unknown"),
+                    "analysis_date": r.get("analysis_date", ""),
+                    "status": r.get("status", "completed"),
+                    "created_at": to_iso(created_at_tz),
+                    "updated_at": to_iso(updated_at_tz),
+                    "analysts": r.get("analysts", []),
+                    "research_depth": r.get("research_depth", 1),
+                    "summary": r.get("summary", ""),
+                    "reports": reports_data,
+                    "source": "analysis_tasks",
+                    "task_id": tasks_doc.get("task_id", report_id),
+                    "recommendation": r.get("recommendation", ""),
+                    "confidence_score": r.get("confidence_score", 0.0),
+                    "risk_level": r.get("risk_level", "中等"),
+                    "key_points": r.get("key_points", []),
+                    "execution_time": r.get("execution_time", 0),
+                    "tokens_used": r.get("tokens_used", 0)
+                }
         else:
             # 转换为详细格式（analysis_reports 命中）
             stock_symbol = doc.get("stock_symbol", "")
@@ -316,6 +354,36 @@ async def get_report_detail(
             created_at_tz = to_config_tz(created_at)
             updated_at_tz = to_config_tz(updated_at)
 
+            # 提取报告内容
+            reports_data = doc.get("reports", {})
+            
+            # 🔥 Fix for empty reports: Fallback to analysis_tasks.result.detailed_analysis
+            if not reports_data or len(reports_data) < 2:
+                task_id = doc.get("task_id")
+                if task_id:
+                    logger.info(f"🔍 [get_report_detail] Reports empty in analysis_reports, checking analysis_tasks for {task_id}")
+                    task_doc = await db.analysis_tasks.find_one({"task_id": task_id})
+                    if task_doc and task_doc.get("result"):
+                        detailed = task_doc["result"].get("detailed_analysis", {})
+                        logger.info(f"🔍 [get_report_detail] Found detailed_analysis keys: {list(detailed.keys())}")
+                        
+                        report_keys = [
+                            "macro_report", "policy_report", "sector_report", 
+                            "strategy_report", "research_team_decision",
+                            "international_news_report", 
+                            "technical_report", "sentiment_report", "valuation_report",
+                            "risk_analysis", "market_sentiment"
+                        ]
+                        
+                        if reports_data is None:
+                            reports_data = {}
+                            
+                        for key in report_keys:
+                            if key in detailed and detailed[key]:
+                                target_key = "strategy_report" if key == "research_team_decision" else key
+                                if target_key not in reports_data:
+                                    reports_data[target_key] = detailed[key]
+
             report = {
                 "id": str(doc["_id"]),
                 "analysis_id": doc.get("analysis_id", ""),
@@ -329,7 +397,7 @@ async def get_report_detail(
                 "analysts": doc.get("analysts", []),
                 "research_depth": doc.get("research_depth", 1),
                 "summary": doc.get("summary", ""),
-                "reports": doc.get("reports", {}),
+                "reports": reports_data,
                 "source": doc.get("source", "unknown"),
                 "task_id": doc.get("task_id", ""),
                 "recommendation": doc.get("recommendation", ""),
@@ -368,8 +436,95 @@ async def get_report_module_content(
         query = _build_report_query(report_id)
         doc = await db.analysis_reports.find_one(query)
 
+        # 🔥 Fix for empty reports: Fallback to analysis_tasks.result.detailed_analysis
+        if doc:
+            reports_data = doc.get("reports", {})
+            if not reports_data or len(reports_data) < 2:
+                task_id = doc.get("task_id")
+                if task_id:
+                    logger.info(f"🔍 [download_report] Reports empty in analysis_reports, checking analysis_tasks for {task_id}")
+                    task_doc = await db.analysis_tasks.find_one({"task_id": task_id})
+                    if task_doc and task_doc.get("result"):
+                        detailed = task_doc["result"].get("detailed_analysis", {})
+                        logger.info(f"🔍 [download_report] Found detailed_analysis keys: {list(detailed.keys())}")
+                        
+                        report_keys = [
+                        "macro_report", "policy_report", "sector_report", 
+                        "strategy_report", "research_team_decision",
+                        "international_news_report", 
+                        "technical_report", "sentiment_report", "valuation_report",
+                        "risk_analysis", "market_sentiment"
+                    ]
+                    
+                    if reports_data is None:
+                        doc["reports"] = {}
+                        
+                    for key in report_keys:
+                        if key in detailed and detailed[key]:
+                            target_key = "strategy_report" if key == "research_team_decision" else key
+                            if target_key not in doc["reports"]:
+                                doc["reports"][target_key] = detailed[key]
+
         if not doc:
-            raise HTTPException(status_code=404, detail="报告不存在")
+            # 尝试从 analysis_tasks 查找
+            tasks_doc = await db.analysis_tasks.find_one(
+                {"$or": [{"task_id": report_id}, {"result.analysis_id": report_id}]},
+                {"result": 1, "task_id": 1, "stock_code": 1}
+            )
+            
+            if tasks_doc and tasks_doc.get("result"):
+                r = tasks_doc["result"]
+                stock_symbol = r.get("stock_symbol", r.get("stock_code", tasks_doc.get("stock_code", "")))
+                stock_name = r.get("stock_name") or get_stock_name(stock_symbol)
+                
+                # 提取报告内容
+                reports_data = r.get("reports", {})
+                
+                # 如果 reports 为空或内容不足，尝试从 detailed_analysis 提取（针对指数分析）
+                if not reports_data or len(reports_data) < 2:
+                    detailed = r.get("detailed_analysis", {})
+                    # 指数分析和多智能体分析的常见报告键
+                    report_keys = [
+                        "macro_report", "policy_report", "sector_report", 
+                        "strategy_report", "research_team_decision",
+                        "international_news_report", 
+                        "technical_report", "sentiment_report", "valuation_report",
+                        "risk_analysis", "market_sentiment"
+                    ]
+                    
+                    # 确保 reports_data 是字典
+                    if reports_data is None:
+                        reports_data = {}
+                        
+                    for key in report_keys:
+                        # 优先从 detailed_analysis 获取
+                        if key in detailed and detailed[key]:
+                            target_key = "strategy_report" if key == "research_team_decision" else key
+                            if target_key not in reports_data:
+                                reports_data[target_key] = detailed[key]
+                        # 其次从 result 顶层获取
+                        elif key in r and r[key]:
+                            target_key = "strategy_report" if key == "research_team_decision" else key
+                            if target_key not in reports_data:
+                                reports_data[target_key] = r[key]
+
+                # 构造兼容的 doc 对象
+                doc = {
+                    "stock_symbol": stock_symbol,
+                    "stock_name": stock_name,
+                    "analysis_date": r.get("analysis_date", datetime.now().strftime("%Y-%m-%d")),
+                    "summary": r.get("summary", ""),
+                    "reports": reports_data,
+                    "analysts": r.get("analysts", []),
+                    "research_depth": r.get("research_depth", 1),
+                    "model_info": r.get("model_info", "Unknown"),
+                    "recommendation": r.get("recommendation", ""),
+                    "confidence_score": r.get("confidence_score", 0.0),
+                    "risk_level": r.get("risk_level", "中等"),
+                    "key_points": r.get("key_points", []),
+                }
+            else:
+                raise HTTPException(status_code=404, detail="报告不存在")
 
         reports = doc.get("reports", {})
 
@@ -448,10 +603,96 @@ async def download_report(
         query = _build_report_query(report_id)
         doc = await db.analysis_reports.find_one(query)
 
-        if not doc:
-            raise HTTPException(status_code=404, detail="报告不存在")
+        # 🔥 Fix for empty reports: Fallback to analysis_tasks.result.detailed_analysis
+        if doc:
+            reports_data = doc.get("reports", {})
+            if not reports_data or len(reports_data) < 2:
+                task_id = doc.get("task_id")
+                if task_id:
+                    logger.info(f"🔍 [download_report] Reports empty in analysis_reports, checking analysis_tasks for {task_id}")
+                    task_doc = await db.analysis_tasks.find_one({"task_id": task_id})
+                    if task_doc and task_doc.get("result"):
+                        detailed = task_doc["result"].get("detailed_analysis", {})
+                        logger.info(f"🔍 [download_report] Found detailed_analysis keys: {list(detailed.keys())}")
+                        
+                        report_keys = [
+                            "macro_report", "policy_report", "sector_report", 
+                            "strategy_report", "research_team_decision",
+                            "international_news_report", 
+                            "technical_report", "sentiment_report", "valuation_report",
+                            "risk_analysis", "market_sentiment"
+                        ]
+                        
+                        if reports_data is None:
+                            doc["reports"] = {}
+                            
+                        for key in report_keys:
+                            if key in detailed and detailed[key]:
+                                target_key = "strategy_report" if key == "research_team_decision" else key
+                                if target_key not in doc["reports"]:
+                                    doc["reports"][target_key] = detailed[key]
 
-        stock_symbol = doc.get("stock_symbol", "unknown")
+        if not doc:
+            # 尝试从 analysis_tasks 查找
+            logger.info(f"⚠️ analysis_reports 未找到，尝试查找 analysis_tasks: {report_id}")
+            tasks_doc = await db.analysis_tasks.find_one(
+                {"$or": [{"task_id": report_id}, {"result.analysis_id": report_id}]},
+                {"result": 1, "task_id": 1, "stock_code": 1, "created_at": 1, "completed_at": 1}
+            )
+            
+            if tasks_doc and tasks_doc.get("result"):
+                r = tasks_doc["result"]
+                stock_symbol = r.get("stock_symbol", r.get("stock_code", tasks_doc.get("stock_code", "")))
+                stock_name = r.get("stock_name") or get_stock_name(stock_symbol)
+                
+                # 提取报告内容
+                reports_data = r.get("reports", {})
+                
+                # 如果 reports 为空或内容不足，尝试从 detailed_analysis 提取（针对指数分析）
+                if not reports_data or len(reports_data) < 2:
+                    detailed = r.get("detailed_analysis", {})
+                    # 指数分析和多智能体分析的常见报告键
+                    report_keys = [
+                        "macro_report", "policy_report", "sector_report", 
+                        "strategy_report", "international_news_report", 
+                        "technical_report", "sentiment_report", "valuation_report",
+                        "risk_analysis", "market_sentiment"
+                    ]
+                    
+                    # 确保 reports_data 是字典
+                    if reports_data is None:
+                        reports_data = {}
+                        
+                    for key in report_keys:
+                        # 优先从 detailed_analysis 获取
+                        if key in detailed and detailed[key]:
+                            reports_data[key] = detailed[key]
+                        # 其次从 result 顶层获取
+                        elif key in r and r[key]:
+                            reports_data[key] = r[key]
+
+                # 构造兼容的 doc 对象
+                doc = {
+                    "stock_symbol": stock_symbol,
+                    "stock_name": stock_name,
+                    "analysis_date": r.get("analysis_date", datetime.now().strftime("%Y-%m-%d")),
+                    "summary": r.get("summary", ""),
+                    "reports": reports_data,
+                    "analysts": r.get("analysts", []),
+                    "research_depth": r.get("research_depth", 1),
+                    "model_info": r.get("model_info", "Unknown"),
+                    "recommendation": r.get("recommendation", ""),
+                    "confidence_score": r.get("confidence_score", 0.0),
+                    "risk_level": r.get("risk_level", "中等"),
+                    "key_points": r.get("key_points", []),
+                }
+            else:
+                raise HTTPException(status_code=404, detail="报告不存在")
+
+        stock_symbol = doc.get("stock_symbol")
+        if not stock_symbol:
+            stock_symbol = "unknown"
+            
         analysis_date = doc.get("analysis_date", datetime.now().strftime("%Y-%m-%d"))
 
         if format == "json":
@@ -541,14 +782,15 @@ async def download_report(
             # PDF 格式下载
             from app.utils.report_exporter import report_exporter
 
-            if not report_exporter.pandoc_available:
-                raise HTTPException(
+            # 检查 PDF 生成能力 (WeasyPrint 或 PDFKit)
+            if not report_exporter.weasyprint_available and not report_exporter.pdfkit_available:
+                 raise HTTPException(
                     status_code=400,
-                    detail="PDF 导出功能不可用。请安装 pandoc 和 PDF 引擎（wkhtmltopdf 或 LaTeX）"
+                    detail="PDF 导出功能不可用。请安装 weasyprint 或 wkhtmltopdf"
                 )
 
             try:
-                # 生成 PDF 文档
+                # 生成 PDF
                 pdf_content = report_exporter.generate_pdf_report(doc)
                 filename = f"{stock_symbol}_{analysis_date}_report.pdf"
 
@@ -562,8 +804,8 @@ async def download_report(
                     headers={"Content-Disposition": f"attachment; filename={filename}"}
                 )
             except Exception as e:
-                logger.error(f"❌ PDF 文档生成失败: {e}")
-                raise HTTPException(status_code=500, detail=f"PDF 文档生成失败: {str(e)}")
+                logger.error(f"❌ PDF 生成失败: {e}")
+                raise HTTPException(status_code=500, detail=f"PDF 生成失败: {str(e)}")
 
         else:
             raise HTTPException(status_code=400, detail=f"不支持的下载格式: {format}")

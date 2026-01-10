@@ -997,6 +997,662 @@ class AKShareProvider(BaseStockDataProvider):
             logger.error(f"标准化{code}历史数据列名失败: {e}")
             return df
 
+    async def get_international_news(self, keywords: str = "", lookback_days: int = 7) -> List[Dict[str, Any]]:
+        """
+        获取国际新闻（通过搜索）
+        
+        Args:
+            keywords: 搜索关键词
+            lookback_days: 回溯天数
+            
+        Returns:
+            新闻列表
+        """
+        if not self.connected:
+            return []
+            
+        try:
+            # 如果没有关键词，使用默认关键词
+            search_keywords = keywords if keywords else "国际财经"
+            
+            logger.info(f"🌍 获取国际新闻: {search_keywords}")
+            
+            # 使用 search_news_eastmoney (异步包装)
+            def fetch_news():
+                return self._search_news_eastmoney(search_keywords, limit=20)
+                
+            df = await asyncio.to_thread(fetch_news)
+            
+            if df is None or df.empty:
+                return []
+                
+            # 过滤日期
+            cutoff_date = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+            if 'date' in df.columns:
+                df = df[df['date'] >= cutoff_date]
+            
+            # 转换为列表
+            news_list = []
+            for _, row in df.iterrows():
+                news_list.append({
+                    "title": str(row.get("title", "")),
+                    "content": str(row.get("content", "")),
+                    "date": str(row.get("date", "")),
+                    "url": str(row.get("url", "")),
+                    "source": str(row.get("source", "东方财富网"))
+                })
+                
+            return news_list
+            
+        except Exception as e:
+            logger.error(f"❌ 获取国际新闻失败: {e}")
+            return []
+
+    async def get_macro_data(self) -> Dict[str, Any]:
+        """
+        获取宏观经济数据
+        """
+        if not self.connected:
+            return {}
+
+        macro_data = {}
+        try:
+            # 1. GDP
+            def fetch_gdp():
+                return self.ak.macro_china_gdp()
+            
+            gdp_df = await asyncio.to_thread(fetch_gdp)
+            if not gdp_df.empty:
+                latest = gdp_df.iloc[-1]
+                macro_data['gdp'] = {
+                    'quarter': str(latest.get('季度', 'N/A')),
+                    'value': float(latest.get('国内生产总值-绝对值', 0)),
+                    'growth_rate': float(latest.get('国内生产总值-同比增长', 0))
+                }
+
+            # 2. CPI
+            def fetch_cpi():
+                return self.ak.macro_china_cpi_yearly()
+            
+            cpi_df = await asyncio.to_thread(fetch_cpi)
+            if not cpi_df.empty:
+                latest = cpi_df.iloc[-1]
+                macro_data['cpi'] = {
+                    'month': str(latest.get('月份', 'N/A')),
+                    'value': float(latest.get('全国-当月', 0)),
+                    'year_on_year': float(latest.get('全国-同比', 0))
+                }
+
+            # 3. PMI
+            def fetch_pmi():
+                return self.ak.macro_china_pmi_yearly()
+            
+            pmi_df = await asyncio.to_thread(fetch_pmi)
+            if not pmi_df.empty:
+                latest = pmi_df.iloc[-1]
+                macro_data['pmi'] = {
+                    'month': str(latest.get('月份', 'N/A')),
+                    'manufacturing': float(latest.get('制造业-指数', 0)),
+                    'non_manufacturing': float(latest.get('非制造业-指数', 0))
+                }
+
+            # 4. M2
+            def fetch_m2():
+                return self.ak.macro_china_m2_yearly()
+            
+            m2_df = await asyncio.to_thread(fetch_m2)
+            if not m2_df.empty:
+                latest = m2_df.iloc[-1]
+                macro_data['m2'] = {
+                    'month': str(latest.get('月份', 'N/A')),
+                    'value': float(latest.get('货币和准货币(M2)-数量(亿元)', 0)),
+                    'growth_rate': float(latest.get('货币和准货币(M2)-同比增长', 0))
+                }
+            
+            # 5. LPR
+            def fetch_lpr():
+                return self.ak.macro_china_lpr()
+            
+            lpr_df = await asyncio.to_thread(fetch_lpr)
+            if not lpr_df.empty:
+                latest = lpr_df.iloc[-1]
+                macro_data['lpr'] = {
+                    'date': str(latest.get('TRADE_DATE', 'N/A')),
+                    'lpr_1y': float(latest.get('LPR1Y', 0)),
+                    'lpr_5y': float(latest.get('LPR5Y', 0))
+                }
+
+        except Exception as e:
+            logger.error(f"❌ AKShare获取宏观数据失败: {e}")
+        
+        return macro_data
+
+    async def get_index_valuation(self, index_code: str) -> Dict[str, Any]:
+        """获取指数估值"""
+        if not self.connected:
+            return {}
+        
+        try:
+            # 提取数字代码
+            import re
+            code_match = re.search(r'\d{6}', index_code)
+            pure_code = code_match.group(0) if code_match else index_code.split('.')[0]
+            
+            def fetch_val():
+                # 使用 stock_zh_index_value_csindex 获取中证指数估值
+                return self.ak.stock_zh_index_value_csindex(symbol=pure_code)
+            
+            df = await asyncio.to_thread(fetch_val)
+            
+            if not df.empty:
+                latest = df.iloc[0] # 按日期降序，取最新的
+                
+                return {
+                    "pe": float(latest.get('市盈率1', 0)), # 静态PE
+                    "pe_ttm": float(latest.get('市盈率2', 0)), # 滚动PE
+                    "dividend_yield": float(latest.get('股息率1', 0)),
+                    "date": str(latest.get('日期', '')),
+                    "evaluation": "N/A",
+                    # 计算分位需要历史数据，这里暂缺
+                    "pe_percentile": 50.0, 
+                    "pb_percentile": 50.0
+                }
+            return {}
+        except Exception as e:
+            logger.error(f"❌ AKShare获取指数估值失败: {e}")
+            return {}
+
+    async def get_index_constituents(self, index_code: str) -> List[Dict[str, Any]]:
+        """获取指数成分股"""
+        if not self.connected:
+            return []
+            
+        try:
+            code = index_code.split('.')[0]
+            
+            def fetch_const():
+                return self.ak.index_stock_cons_csindex(symbol=code)
+            
+            df = await asyncio.to_thread(fetch_const)
+            if df is not None and not df.empty:
+                # 转换格式
+                result = []
+                for _, row in df.iterrows():
+                    result.append({
+                        "symbol": row.get('成分券代码', ''),
+                        "name": row.get('成分券名称', ''),
+                        "weight": float(row.get('权重', 0)) if '权重' in row else 0
+                    })
+                return result
+            return []
+        except Exception as e:
+            logger.warning(f"⚠️ AKShare获取指数成分股失败: {e}")
+            return []
+
+    async def get_market_funds_flow(self) -> Dict[str, Any]:
+        """获取全市场资金流向"""
+        if not self.connected:
+            return {}
+            
+        try:
+            def fetch_flow():
+                return self.ak.stock_hsgt_hist_em(symbol="北向资金")
+            
+            df = await asyncio.to_thread(fetch_flow)
+            if not df.empty:
+                latest = df.iloc[-1]
+                return {
+                    "north_money_inflow": float(latest.get('当日净流入', 0)),
+                    "north_money_total": float(latest.get('累计净流入', 0))
+                }
+            return {}
+        except Exception as e:
+            logger.error(f"❌ AKShare获取资金流向失败: {e}")
+            return {}
+            
+    async def get_sector_fund_flow(self) -> Dict[str, Any]:
+        """获取板块资金流向"""
+        if not self.connected:
+            return {}
+            
+        try:
+            def fetch_sector():
+                return self.ak.stock_board_industry_name_em()
+            
+            df = await asyncio.to_thread(fetch_sector)
+            if df is not None and not df.empty:
+                # 获取前5和后5
+                # 注意：stock_board_industry_name_em 可能不包含资金流数据，需结合 stock_board_industry_summary_ths
+                pass
+                
+            # 使用 stock_board_industry_summary_ths
+            def fetch_summary():
+                return self.ak.stock_board_industry_summary_ths()
+            
+            df_summary = await asyncio.to_thread(fetch_summary)
+            if not df_summary.empty:
+                df_summary = df_summary.sort_values('涨跌幅', ascending=False)
+                
+                top_sectors = []
+                for _, row in df_summary.head(5).iterrows():
+                    top_sectors.append({
+                        "name": row.get('板块', ''),
+                        "change_pct": float(row.get('涨跌幅', 0)),
+                        "net_inflow": float(row.get('流入资金', 0)) if '流入资金' in row else 0
+                    })
+                    
+                bottom_sectors = []
+                for _, row in df_summary.tail(5).iterrows():
+                    bottom_sectors.append({
+                        "name": row.get('板块', ''),
+                        "change_pct": float(row.get('涨跌幅', 0)),
+                        "net_inflow": float(row.get('流入资金', 0)) if '流入资金' in row else 0
+                    })
+                    
+                return {
+                    "top_sectors": top_sectors,
+                    "bottom_sectors": bottom_sectors
+                }
+            return {}
+        except Exception as e:
+            logger.error(f"❌ AKShare获取板块资金流失败: {e}")
+            return {}
+
+    async def get_index_daily(self, ts_code: str, start_date: str = None, end_date: str = None) -> Optional[pd.DataFrame]:
+        """获取指数日线"""
+        if not self.connected:
+            return None
+            
+        try:
+            # 处理代码格式，AKShare(Sina源)需要 sh/sz 前缀
+            code = ts_code
+            
+            # 特殊处理：针对 98 开头的东方财富板块指数
+            is_concept_index = False
+            if "98" in ts_code or ts_code.startswith("BK"):
+                # 尝试提取纯代码
+                import re
+                match = re.search(r'(98\d{4}|BK\d{4})', ts_code)
+                if match:
+                    code = match.group(1)
+                    is_concept_index = True
+            
+            if not is_concept_index:
+                if "." in ts_code:
+                    symbol, suffix = ts_code.split(".")
+                    if suffix == "SH":
+                        code = f"sh{symbol}"
+                    elif suffix == "SZ":
+                        code = f"sz{symbol}"
+                    else:
+                        code = symbol # 其他后缀尝试直接使用代码
+                elif not (ts_code.startswith("sh") or ts_code.startswith("sz")):
+                    # 如果没有后缀也没有前缀，默认尝试sh(如果是6开头)或sz(如果是0/3开头)
+                    if ts_code.startswith("6"):
+                        code = f"sh{ts_code}"
+                    elif ts_code.startswith("0") or ts_code.startswith("3"):
+                        code = f"sz{ts_code}"
+
+            def fetch_daily():
+                return self.ak.stock_zh_index_daily(symbol=code)
+            
+            # 如果是概念指数，直接使用 em 接口
+            if is_concept_index:
+                def fetch_concept_daily():
+                    # stock_zh_index_daily_em 适用于东方财富板块指数
+                    return self.ak.stock_zh_index_daily_em(symbol=code)
+                try:
+                    df = await asyncio.to_thread(fetch_concept_daily)
+                    logger.info(f"✅ 使用 stock_zh_index_daily_em 获取 {code} 数据成功")
+                except Exception as e:
+                    logger.error(f"❌ 获取概念指数 {code} 失败: {e}")
+                    df = None
+            else:
+                try:
+                    df = await asyncio.to_thread(fetch_daily)
+                except Exception as e1:
+                    # 尝试使用 stock_zh_index_daily_em (东方财富接口，支持更多指数)
+                    # 注意：em接口可能需要不同的代码格式
+                    logger.warning(f"⚠️ AKShare Sina接口获取失败: {e1}，尝试EastMoney接口...")
+                    
+                    def fetch_daily_em():
+                        # EastMoney接口通常直接使用代码，不需要sh/sz前缀，或者需要特定格式
+                        # 尝试去除前缀
+                        em_code = code.replace("sh", "").replace("sz", "")
+                        return self.ak.stock_zh_index_daily_em(symbol=em_code)
+                    
+                    try:
+                        df = await asyncio.to_thread(fetch_daily_em)
+                    except Exception as e2:
+                        logger.error(f"❌ AKShare EastMoney接口获取失败: {e2}")
+                        df = None
+
+            if df is not None and not df.empty:
+                # 标准化列名
+                df = df.rename(columns={
+                    'date': 'trade_date',
+                    'open': 'open',
+                    'high': 'high', 
+                    'low': 'low',
+                    'close': 'close',
+                    'volume': 'volume'
+                })
+                # 过滤日期
+                if start_date:
+                    df = df[df['trade_date'] >= pd.to_datetime(start_date)]
+                if end_date:
+                    df = df[df['trade_date'] <= pd.to_datetime(end_date)]
+                    
+                return df
+            return None
+        except Exception as e:
+            logger.error(f"❌ AKShare获取指数日线失败: {e}")
+            return None
+
+        """
+        获取宏观经济数据 (GDP, CPI, PMI, M2, LPR)
+        """
+        if not self.connected:
+            return {}
+
+        macro_data = {}
+        try:
+            # 1. GDP
+            try:
+                gdp_df = await asyncio.to_thread(self.ak.macro_china_gdp)
+                if not gdp_df.empty:
+                    latest_gdp = gdp_df.iloc[-1]
+                    macro_data['gdp'] = {
+                        'quarter': str(latest_gdp.get('季度', 'N/A')),
+                        'value': float(latest_gdp.get('国内生产总值-绝对值', 0)),
+                        'growth_rate': float(latest_gdp.get('国内生产总值-同比增长', 0))
+                    }
+            except Exception as e:
+                logger.warning(f"⚠️ AKShare 获取 GDP 失败: {e}")
+
+            # 2. CPI
+            try:
+                cpi_df = await asyncio.to_thread(self.ak.macro_china_cpi_yearly)
+                if not cpi_df.empty:
+                    latest_cpi = cpi_df.iloc[-1]
+                    macro_data['cpi'] = {
+                        'month': str(latest_cpi.get('月份', 'N/A')),
+                        'value': float(latest_cpi.get('全国-当月', 100)),
+                        'year_on_year': float(latest_cpi.get('全国-同比', 0))
+                    }
+            except Exception as e:
+                logger.warning(f"⚠️ AKShare 获取 CPI 失败: {e}")
+
+            # 3. M2
+            try:
+                m2_df = await asyncio.to_thread(self.ak.macro_china_m2_yearly)
+                if not m2_df.empty:
+                    latest_m2 = m2_df.iloc[-1]
+                    macro_data['m2'] = {
+                        'month': str(latest_m2.get('月份', 'N/A')),
+                        'value': float(latest_m2.get('货币和准货币(M2)-数量(亿元)', 0)),
+                        'growth_rate': float(latest_m2.get('货币和准货币(M2)-同比增长', 0))
+                    }
+            except Exception as e:
+                logger.warning(f"⚠️ AKShare 获取 M2 失败: {e}")
+
+            return macro_data
+
+        except Exception as e:
+            logger.error(f"❌ AKShare 获取宏观数据失败: {e}")
+            return {}
+
+    async def get_stock_sector(self, code: str) -> Optional[str]:
+        """
+        获取股票所属行业 或 指数名称
+        """
+        if not self.connected:
+            return None
+            
+        try:
+            # 1. 尝试作为个股查询行业
+            def fetch_info():
+                return self.ak.stock_individual_info_em(symbol=code)
+            
+            df = await asyncio.to_thread(fetch_info)
+            if df is not None and not df.empty:
+                # df columns: item, value
+                # item: 股票代码, 股票简称, 行业, ...
+                industry_row = df[df['item'] == '行业']
+                if not industry_row.empty:
+                    return industry_row.iloc[0]['value']
+            
+            # 2. 尝试作为指数查询名称 (用于板块分析)
+            # 针对 980022 这种指数代码
+            def fetch_index_name():
+                try:
+                    # 尝试从东财所有指数行情中查找
+                    # 注意：这可能比较慢，但为了准确性是值得的
+                    # 我们先尝试获取热门指数，如果不行再全量
+                    # 这里直接用 stock_zh_index_spot_em 应该包含大部分
+                    df_index = self.ak.stock_zh_index_spot_em(symbol=code) # 注意：这个函数可能不支持symbol参数，需检查文档或尝试
+                    # 如果 akshare 的 stock_zh_index_spot_em 不支持 symbol 参数，我们需要获取列表后过滤
+                    # 但通常 akshare 的 spot 接口是获取列表。
+                    # 让我们假设它不支持 symbol，需要获取列表。
+                    # 为了性能，我们只在个股查询失败后执行。
+                    
+                    # 修正：akshare 的 stock_zh_index_spot_em 返回所有指数
+                    # 我们可以尝试 stock_zh_index_value_csindex(symbol=code) 如果是中证
+                    return None 
+                except:
+                    return None
+
+            # 优化：尝试直接获取指数详情，如果成功则提取名称
+            # 使用 stock_zh_index_daily_em 获取日线，虽然有点重，但能确认代码存在
+            # 但我们需要名称。
+            
+            # 尝试搜索接口 (已有的 _get_stock_news_direct 逻辑类似的搜索?)
+            # 不，太复杂。
+            
+            # 使用简单的全量匹配（带缓存？）
+            # 由于这是异步方法，我们可以接受一点延迟
+            
+            def fetch_all_indices():
+                # 获取东方财富主要指数
+                return self.ak.stock_zh_index_spot_em()
+            
+            # 只有当代码看起来像指数时才尝试（非6位或特定开头，或者个股查询失败）
+            # 这里已经是“个股查询失败”后的逻辑
+            
+            df_indices = await asyncio.to_thread(fetch_all_indices)
+            if df_indices is not None and not df_indices.empty:
+                # 假设列名为 '代码', '名称'
+                if '代码' in df_indices.columns and '名称' in df_indices.columns:
+                    target = df_indices[df_indices['代码'] == code]
+                    if not target.empty:
+                        name = target.iloc[0]['名称']
+                        # 去掉"指数"后缀，以便匹配板块
+                        return name.replace('指数', '').replace('主题', '').strip()
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ AKShare 获取股票行业/指数名称失败: {e}")
+            return None
+
+    async def get_sector_fund_flow(self, sector_name: str = None) -> Dict[str, Any]:
+        """
+        获取板块资金流向 (包含行业和概念)
+        
+        Args:
+            sector_name: 可选，指定板块名称
+        """
+        if not self.connected:
+            return {}
+
+        sector_data = {
+            'top_sectors': [],
+            'bottom_sectors': [],
+            'all_sectors': [],
+            'specific_sector': None,
+            'top_concepts': [],
+            'bottom_concepts': []
+        }
+        
+        try:
+            # 1. 获取行业资金流
+            # 优先使用东方财富接口 (stock_sector_fund_flow_rank)
+            def fetch_industry_flow():
+                try:
+                    return self.ak.stock_sector_fund_flow_rank(symbol="行业")
+                except:
+                    # Fallback to THS
+                    return self.ak.stock_board_industry_summary_ths()
+            
+            industry_df = await asyncio.to_thread(fetch_industry_flow)
+            
+            # 2. 获取概念资金流
+            def fetch_concept_flow():
+                try:
+                    # 尝试使用 rank 接口
+                    return self.ak.stock_sector_fund_flow_rank(symbol="概念")
+                except:
+                    # Fallback to concept flow
+                    return self.ak.stock_fund_flow_concept(symbol="即时")
+                
+            concept_df = await asyncio.to_thread(fetch_concept_flow)
+            
+            # 统一列名处理
+            def normalize_df(df, type_name="industry"):
+                if df is None or df.empty:
+                    return pd.DataFrame()
+                
+                df = df.copy()
+                cols = df.columns.tolist()
+                
+                name_col = next((c for c in cols if c in ['名称', '板块', '行业']), None)
+                change_col = next((c for c in cols if c in ['今日涨跌幅', '涨跌幅', '行业-涨跌幅']), None)
+                flow_col = next((c for c in cols if c in ['今日主力净流入', '净流入', '流入资金', '净额']), None)
+                turnover_col = next((c for c in cols if c in ['今日换手率', '换手率']), None)
+                leader_col = next((c for c in cols if c in ['领涨股', '今日领涨股']), None)
+                
+                if not name_col: return pd.DataFrame()
+                
+                df['name'] = df[name_col]
+                df['change_pct'] = df[change_col].apply(lambda x: float(str(x).replace('%','')) if x else 0) if change_col else 0.0
+                
+                def parse_flow(x):
+                    if not x: return 0.0
+                    s = str(x)
+                    factor = 1.0
+                    if '亿' in s: factor = 1.0
+                    elif '万' in s: factor = 0.0001
+                    return float(s.replace('亿','').replace('万','').replace('元','')) * factor
+                
+                df['net_inflow'] = df[flow_col].apply(parse_flow) if flow_col else 0.0
+                df['turnover_rate'] = df[turnover_col].apply(lambda x: float(str(x).replace('%','')) if x else 0) if turnover_col else 0.0
+                if leader_col:
+                     df['leading_stock'] = df[leader_col]
+                else:
+                     df['leading_stock'] = ''
+                     
+                return df
+
+            industry_df = normalize_df(industry_df, "industry")
+            concept_df = normalize_df(concept_df, "concept")
+            
+            # --- 处理特定板块查询 ---
+            if sector_name:
+                found = False
+                
+                # A. 先在行业中查找
+                if not industry_df.empty:
+                    # 尝试模糊匹配
+                    target_row = industry_df[industry_df['name'].str.contains(sector_name, na=False)]
+                    if not target_row.empty:
+                        row = target_row.iloc[0]
+                        sector_data['specific_sector'] = {
+                            'name': row['name'],
+                            'type': 'industry',
+                            'change_pct': row['change_pct'],
+                            'net_inflow': row['net_inflow'],
+                            'turnover_rate': row['turnover_rate'],
+                            'rank': int(target_row.index[0]) + 1
+                        }
+                        found = True
+
+                # B. 如果行业没找到，在概念中查找
+                if not found and not concept_df.empty:
+                    target_row = concept_df[concept_df['name'].str.contains(sector_name, na=False)]
+                    if not target_row.empty:
+                        row = target_row.iloc[0]
+                        sector_data['specific_sector'] = {
+                            'name': row['name'],
+                            'type': 'concept',
+                            'change_pct': row['change_pct'],
+                            'net_inflow': row['net_inflow'],
+                            'turnover_rate': row['turnover_rate'],
+                            'leading_stock': row['leading_stock'],
+                            'rank': int(target_row.index[0]) + 1
+                        }
+                        found = True
+                        
+                if found:
+                    return sector_data
+
+            # --- 处理默认列表 (Top/Bottom) ---
+
+            # 1. 行业 Top/Bottom
+            if not industry_df.empty:
+                # 按涨跌幅排序
+                industry_df = industry_df.sort_values('change_pct', ascending=False)
+                
+                # Top 5 领涨板块
+                for _, row in industry_df.head(5).iterrows():
+                    sector_data['top_sectors'].append({
+                        'name': row['name'],
+                        'change_pct': row['change_pct'],
+                        'net_inflow': row['net_inflow'],
+                        'turnover_rate': row['turnover_rate'],
+                        'type': 'industry'
+                    })
+                
+                # Bottom 5 领跌板块
+                for _, row in industry_df.tail(5).iterrows():
+                    sector_data['bottom_sectors'].append({
+                        'name': row['name'],
+                        'change_pct': row['change_pct'],
+                        'net_inflow': row['net_inflow'],
+                        'turnover_rate': row['turnover_rate'],
+                        'type': 'industry'
+                    })
+
+            # 2. 概念 Top/Bottom
+            if not concept_df.empty:
+                # 按涨跌幅排序
+                concept_df = concept_df.sort_values('change_pct', ascending=False)
+                
+                for _, row in concept_df.head(5).iterrows():
+                    sector_data['top_concepts'].append({
+                        'name': row['name'],
+                        'change_pct': row['change_pct'],
+                        'net_inflow': row['net_inflow'],
+                        'leading_stock': row['leading_stock'],
+                        'type': 'concept'
+                    })
+                
+                for _, row in concept_df.tail(5).iterrows():
+                    sector_data['bottom_concepts'].append({
+                        'name': row['name'],
+                        'change_pct': row['change_pct'],
+                        'net_inflow': row['net_inflow'],
+                        'leading_stock': row['leading_stock'],
+                        'type': 'concept'
+                    })
+                    
+            logger.info(f"✅ AKShare 获取板块资金流成功: 行业 {len(industry_df)} 条, 概念 {len(concept_df)} 条")
+            
+            return sector_data
+            
+        except Exception as e:
+            logger.error(f"❌ AKShare 获取板块资金流失败: {e}")
+            return sector_data
+
     async def get_financial_data(self, code: str) -> Dict[str, Any]:
         """
         获取财务数据
@@ -1360,6 +2016,199 @@ class AKShareProvider(BaseStockDataProvider):
         except Exception as e:
             self.logger.error(f"❌ 获取AKShare新闻失败 symbol={symbol}: {e}")
             return None
+
+    async def get_international_news_async(self, keywords: str = "", lookback_days: int = 7) -> List[Dict[str, Any]]:
+        """
+        获取国际新闻（异步）
+        使用金十数据 (Jinshi) 或 东方财富全球新闻
+        """
+        if not self.connected:
+            return []
+
+        try:
+            self.logger.info(f"🌍 获取国际新闻: {keywords}, lookback={lookback_days}d")
+            
+            news_list = []
+            
+            # 1. 优先尝试金十数据 (宏观/国际)
+            try:
+                def fetch_js_news():
+                    # 金十数据接口：ak.stock_js_news(symbol="国际")
+                    return self.ak.stock_js_news(symbol="国际")
+                    
+                js_df = await asyncio.to_thread(fetch_js_news)
+                if js_df is not None and not js_df.empty:
+                    for _, row in js_df.iterrows():
+                        content = str(row.get('content', ''))
+                        time_str = str(row.get('datetime', ''))
+                        
+                        # 简单过滤
+                        if keywords and keywords not in content:
+                            continue
+                            
+                        news_list.append({
+                            "title": content[:50] + "...", # 金十通常只有内容
+                            "content": content,
+                            "date": time_str,
+                            "source": "金十数据",
+                            "url": ""
+                        })
+                    
+                    if news_list:
+                        self.logger.info(f"✅ 从金十数据获取到 {len(news_list)} 条国际新闻")
+                        return news_list
+            except Exception as e:
+                self.logger.warning(f"⚠️ 金十数据获取失败: {e}")
+
+            # 2. 使用东方财富全球财经快讯
+            try:
+                def fetch_global_news():
+                     return self.ak.stock_info_global_cls()
+
+                cls_df = await asyncio.to_thread(fetch_global_news)
+                
+                if cls_df is not None and not cls_df.empty:
+                    for _, row in cls_df.iterrows():
+                        title = str(row.get('title', '') or row.get('标题', ''))
+                        content = str(row.get('content', '') or row.get('内容', ''))
+                        time_str = str(row.get('time', '') or row.get('发布时间', ''))
+                        
+                        text = f"{title} {content}"
+                        if keywords and keywords not in text:
+                            continue
+                            
+                        news_list.append({
+                            "title": title,
+                            "content": content,
+                            "date": time_str,
+                            "source": "财联社(全球)",
+                            "url": ""
+                        })
+                    
+                    if news_list:
+                        self.logger.info(f"✅ 从财联社获取到 {len(news_list)} 条国际新闻")
+                        return news_list
+            except Exception as e:
+                self.logger.warning(f"⚠️ 财联社全球新闻获取失败: {e}")
+
+            # 3. 兜底：使用 CCTV 财经新闻并过滤
+            try:
+                cctv_df = await asyncio.to_thread(self.ak.news_cctv)
+                if cctv_df is not None and not cctv_df.empty:
+                     for _, row in cctv_df.iterrows():
+                        title = str(row.get('title', '') or row.get('标题', ''))
+                        content = str(row.get('content', '') or row.get('内容', ''))
+                        
+                        text = f"{title} {content}"
+                        # 只有当包含关键词时才添加
+                        if keywords and keywords in text:
+                            news_list.append({
+                                "title": title,
+                                "content": content,
+                                "date": str(row.get('date', '')),
+                                "source": "CCTV财经",
+                                "url": ""
+                            })
+            except Exception as e:
+                self.logger.error(f"❌ CCTV新闻获取失败: {e}")
+
+            self.logger.info(f"✅ 获取国际新闻完成: 共 {len(news_list)} 条")
+            return news_list
+
+        except Exception as e:
+            self.logger.error(f"❌ 获取国际新闻失败: {e}")
+            return []
+
+    async def get_macro_data(self, end_date: str = None) -> Dict[str, Any]:
+        """
+        获取宏观经济数据
+        
+        Args:
+            end_date: 截止日期
+            
+        Returns:
+            宏观数据字典
+        """
+        try:
+            self.logger.info("🌍 获取宏观经济数据...")
+            macro_data = {}
+            
+            # 1. CPI
+            try:
+                def fetch_cpi():
+                    return self.ak.macro_china_cpi()
+                cpi_df = await asyncio.to_thread(fetch_cpi)
+                if not cpi_df.empty:
+                    latest = cpi_df.iloc[0]
+                    macro_data['cpi'] = {
+                        "value": float(latest['cpi']),
+                        "month": str(latest['month'])
+                    }
+            except Exception as e:
+                self.logger.warning(f"CPI获取失败: {e}")
+
+            # 2. PPI
+            try:
+                def fetch_ppi():
+                    return self.ak.macro_china_ppi()
+                ppi_df = await asyncio.to_thread(fetch_ppi)
+                if not ppi_df.empty:
+                    latest = ppi_df.iloc[0]
+                    macro_data['ppi'] = {
+                        "value": float(latest['ppi']),
+                        "month": str(latest['month'])
+                    }
+            except Exception as e:
+                self.logger.warning(f"PPI获取失败: {e}")
+                
+            # 3. PMI
+            try:
+                def fetch_pmi():
+                    return self.ak.macro_china_pmi()
+                pmi_df = await asyncio.to_thread(fetch_pmi)
+                if not pmi_df.empty:
+                    latest = pmi_df.iloc[0]
+                    macro_data['pmi'] = {
+                        "value": float(latest['pmi']),
+                        "month": str(latest['month'])
+                    }
+            except Exception as e:
+                self.logger.warning(f"PMI获取失败: {e}")
+
+            # 4. M2
+            try:
+                def fetch_money():
+                    return self.ak.macro_china_money_supply()
+                money_df = await asyncio.to_thread(fetch_money)
+                if not money_df.empty:
+                    latest = money_df.iloc[0]
+                    macro_data['m2'] = {
+                        "value": float(latest['m2']),
+                        "month": str(latest['month'])
+                    }
+            except Exception as e:
+                self.logger.warning(f"M2获取失败: {e}")
+                
+            # 5. GDP (季度)
+            try:
+                def fetch_gdp():
+                    return self.ak.macro_china_gdp()
+                gdp_df = await asyncio.to_thread(fetch_gdp)
+                if not gdp_df.empty:
+                    latest = gdp_df.iloc[0]
+                    macro_data['gdp'] = {
+                        "value": float(latest['gdp']),
+                        "quarter": str(latest['quarter'])
+                    }
+            except Exception as e:
+                self.logger.warning(f"GDP获取失败: {e}")
+
+            self.logger.info(f"✅ 宏观数据获取成功: {list(macro_data.keys())}")
+            return macro_data
+
+        except Exception as e:
+            self.logger.error(f"❌ 宏观数据获取失败: {e}")
+            return {}
 
     def _parse_news_time(self, time_str: str) -> Optional[datetime]:
         """解析新闻时间"""

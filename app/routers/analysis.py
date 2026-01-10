@@ -14,8 +14,7 @@ import asyncio
 
 from app.routers.auth_db import get_current_user
 from app.services.queue_service import get_queue_service, QueueService
-from app.services.analysis_service import get_analysis_service
-from app.services.simple_analysis_service import get_simple_analysis_service
+from app.services.task_analysis_service import get_task_analysis_service
 from app.services.websocket_manager import get_websocket_manager
 from app.models.analysis import (
     SingleAnalysisRequest, BatchAnalysisRequest, AnalysisParameters,
@@ -50,7 +49,7 @@ async def submit_single_analysis(
         logger.info(f"📊 请求数据: {request}")
 
         # 立即创建任务记录并返回，不等待执行完成
-        analysis_service = get_simple_analysis_service()
+        analysis_service = get_task_analysis_service()
         result = await analysis_service.create_analysis_task(user["id"], request)
 
         # 提取变量，避免闭包问题
@@ -67,7 +66,7 @@ async def submit_single_analysis(
 
                 # 重新获取服务实例，确保在正确的上下文中
                 logger.info(f"🔧 [BackgroundTask] 正在获取服务实例...")
-                service = get_simple_analysis_service()
+                service = get_task_analysis_service()
                 logger.info(f"✅ [BackgroundTask] 服务实例获取成功: {id(service)}")
 
                 logger.info(f"🚀 [BackgroundTask] 准备调用 execute_analysis_background...")
@@ -112,7 +111,7 @@ async def get_task_status_new(
         logger.info(f"🔍 [NEW ROUTE] 进入新版状态查询路由: {task_id}")
         logger.info(f"👤 [NEW ROUTE] 用户: {user}")
 
-        analysis_service = get_simple_analysis_service()
+        analysis_service = get_task_analysis_service()
         logger.info(f"🔧 [NEW ROUTE] 获取分析服务实例: {id(analysis_service)}")
 
         result = await analysis_service.get_task_status(task_id)
@@ -152,7 +151,8 @@ async def get_task_status_new(
                     "task_id": task_id,
                     "status": status,
                     "progress": progress,
-                    "message": f"任务{status}中...",
+                    "message": task_result.get("error") or task_result.get("last_error") if status == "failed" else f"任务{status}中...",
+                    "error": task_result.get("error") or task_result.get("last_error"),
                     "current_step": status,
                     "start_time": start_time,
                     "end_time": task_result.get("completed_at"),
@@ -228,7 +228,7 @@ async def get_task_result(
         logger.info(f"🔍 [RESULT] 获取任务结果: {task_id}")
         logger.info(f"👤 [RESULT] 用户: {user}")
 
-        analysis_service = get_simple_analysis_service()
+        analysis_service = get_task_analysis_service()
         task_status = await analysis_service.get_task_status(task_id)
 
         result_data = None
@@ -339,6 +339,18 @@ async def get_task_result(
                     }
 
         if not result_data:
+            # 检查任务是否失败
+            if task_status and task_status.get('status') == 'failed':
+                return {
+                    "success": False,
+                    "message": f"任务执行失败: {task_status.get('error', '未知错误')}",
+                    "data": {
+                        "status": "failed",
+                        "error": task_status.get('error'),
+                        "task_id": task_id
+                    }
+                }
+            
             logger.warning(f"❌ [RESULT] 所有数据源都未找到结果: {task_id}")
             raise HTTPException(status_code=404, detail="分析结果不存在")
 
@@ -411,7 +423,14 @@ async def get_task_result(
                         'fundamentals_report',
                         'investment_plan',
                         'trader_investment_plan',
-                        'final_trade_decision'
+                        'final_trade_decision',
+                        # 指数分析相关报告
+                        'macro_report',
+                        'policy_report',
+                        'sector_report',
+                        'international_news_report',
+                        'technical_report',
+                        'strategy_report'
                     ]
 
                     # 从state中提取报告内容
@@ -714,7 +733,7 @@ async def list_all_tasks(
     try:
         logger.info(f"📋 查询所有任务列表")
 
-        tasks = await get_simple_analysis_service().list_all_tasks(
+        tasks = await get_task_analysis_service().list_all_tasks(
             status=status,
             limit=limit,
             offset=offset
@@ -746,7 +765,7 @@ async def list_user_tasks(
     try:
         logger.info(f"📋 查询用户任务列表: {user['id']}")
 
-        tasks = await get_simple_analysis_service().list_user_tasks(
+        tasks = await get_task_analysis_service().list_user_tasks(
             user_id=user["id"],
             status=status,
             limit=limit,
@@ -781,7 +800,7 @@ async def submit_batch_analysis(
     try:
         logger.info(f"🎯 [批量分析] 收到批量分析请求: title={request.title}")
 
-        simple_service = get_simple_analysis_service()
+        simple_service = get_task_analysis_service()
         batch_id = str(uuid.uuid4())
         task_ids: List[str] = []
         mapping: List[Dict[str, str]] = []
@@ -996,7 +1015,7 @@ async def get_user_analysis_history(
     """获取用户分析历史（支持基础筛选与分页）"""
     try:
         # 先获取用户任务列表（内存优先，MongoDB兜底）
-        raw_tasks = await get_simple_analysis_service().list_user_tasks(
+        raw_tasks = await get_task_analysis_service().list_user_tasks(
             user_id=user["id"],
             status=status,
             limit=page_size,
@@ -1125,7 +1144,7 @@ async def get_zombie_tasks(
         raise HTTPException(status_code=403, detail="仅管理员可访问")
 
     try:
-        svc = get_simple_analysis_service()
+        svc = get_task_analysis_service()
         zombie_tasks = await svc.get_zombie_tasks(max_running_hours)
 
         return {
@@ -1153,7 +1172,7 @@ async def cleanup_zombie_tasks(
         raise HTTPException(status_code=403, detail="仅管理员可访问")
 
     try:
-        svc = get_simple_analysis_service()
+        svc = get_task_analysis_service()
         result = await svc.cleanup_zombie_tasks(max_running_hours)
 
         return {
@@ -1176,7 +1195,7 @@ async def mark_task_as_failed(
     用于手动清理卡住的任务
     """
     try:
-        svc = get_simple_analysis_service()
+        svc = get_task_analysis_service()
 
         # 更新内存中的任务状态
         from app.services.memory_state_manager import TaskStatus
@@ -1231,7 +1250,7 @@ async def delete_task(
     从内存和数据库中删除任务记录
     """
     try:
-        svc = get_simple_analysis_service()
+        svc = get_task_analysis_service()
 
         # 从内存中删除任务
         await svc.memory_manager.remove_task(task_id)

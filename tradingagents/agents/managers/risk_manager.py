@@ -13,17 +13,45 @@ def create_risk_manager(llm, memory):
 
         history = state["risk_debate_state"]["history"]
         risk_debate_state = state["risk_debate_state"]
-        market_research_report = state["market_report"]
-        news_report = state["news_report"]
-        fundamentals_report = state["news_report"]
-        sentiment_report = state["sentiment_report"]
-        trader_plan = state["investment_plan"]
+        
+        market_research_report = state.get("market_report", "")
+        news_report = state.get("news_report", "")
+        fundamentals_report = state.get("fundamentals_report", "")
+        sentiment_report = state.get("sentiment_report", "")
+        
+        # 指数分析字段
+        macro_report = state.get("macro_report", "")
+        policy_report = state.get("policy_report", "")
+        sector_report = state.get("sector_report", "")
+        intl_news_report = state.get("international_news_report", "")
+        technical_report = state.get("technical_report", "")
+        
+        is_index = state.get("is_index", False)
+        
+        trader_plan = state.get("investment_plan") or state.get("strategy_report", "")
 
-        curr_situation = f"{market_research_report}\n\n{sentiment_report}\n\n{news_report}\n\n{fundamentals_report}"
+        # 1. 确定当前情境
+        if is_index:
+             curr_situation = f"{macro_report}\n\n{policy_report}\n\n{sector_report}\n\n{technical_report}"
+        else:
+             curr_situation = f"{market_research_report}\n\n{sentiment_report}\n\n{news_report}\n\n{fundamentals_report}"
+
+        # 2. 记忆检索 (通用)
+        # 获取研究深度
+        research_depth = state.get("research_depth", "标准")
+        
+        # 根据研究深度调整记忆检索数量
+        n_matches = 2
+        if research_depth == "全面":
+            n_matches = 5  # 全面模式下检索更多历史记忆
+            logger.info(f"🧠 [Risk Manager] 全面分析模式：检索 {n_matches} 条历史记忆")
+        elif research_depth == "深度":
+            n_matches = 3
+            logger.info(f"🧠 [Risk Manager] 深度分析模式：检索 {n_matches} 条历史记忆")
 
         # 安全检查：确保memory不为None
         if memory is not None:
-            past_memories = memory.get_memories(curr_situation, n_matches=2)
+            past_memories = memory.get_memories(curr_situation, n_matches=n_matches)
         else:
             logger.warning(f"⚠️ [DEBUG] memory为None，跳过历史记忆检索")
             past_memories = []
@@ -32,7 +60,36 @@ def create_risk_manager(llm, memory):
         for i, rec in enumerate(past_memories, 1):
             past_memory_str += rec["recommendation"] + "\n\n"
 
-        prompt = f"""作为风险管理委员会主席和辩论主持人，您的目标是评估三位风险分析师——激进、中性和安全/保守——之间的辩论，并确定交易员的最佳行动方案。您的决策必须产生明确的建议：买入、卖出或持有。只有在有具体论据强烈支持时才选择持有，而不是在所有方面都似乎有效时作为后备选择。力求清晰和果断。
+        # 3. 构建 Prompt
+        if is_index:
+             # 指数分析专用 Prompt
+             system_prompt = f"""作为宏观风险管理委员会主席，您的目标是评估三位风险分析师（激进、中性、保守）关于当前市场环境的辩论，并对策略顾问的指数投资建议进行最终裁决。
+             
+您的核心职责是识别和防范**系统性风险**。与个股不同，指数投资更受宏观经济、政策导向和全球流动性的影响。
+
+决策指导原则：
+1. **关注系统性因子**：重点评估宏观经济周期（复苏/过热/滞胀/衰退）、货币政策转向（宽松/紧缩）以及地缘政治风险。
+2. **警惕黑天鹅与灰犀牛**：特别关注分析师提到的流动性危机、政策突变或外部市场崩盘的风险传导。
+3. **评估市场情绪**：结合技术面和新闻分析，判断市场是否处于极端贪婪或恐慌状态，这往往是反转的信号。
+4. **完善策略建议**：基于辩论结果，对策略顾问的原始计划 **{trader_plan}** 进行修正。如果风险过高，必须建议降低仓位或增加对冲；如果机会确立且风险可控，确认做多建议。
+5. **历史以史为鉴**：参考历史类似宏观环境下的市场表现 **{past_memory_str}**，避免重蹈覆辙。
+
+交付成果：
+- 明确且可操作的建议：买入、卖出或持有（空仓/轻仓/重仓）。
+- 详细的裁决理由，必须引用宏观数据或政策逻辑作为支撑。
+
+---
+
+**分析师辩论历史：**
+{history}
+
+---
+
+请以首席风险官的口吻，用中文撰写最终裁决报告。确保您的决定充分考虑了下行保护，特别是在深度分析模式下，请详细列出潜在的风险触发条件。"""
+
+        else:
+             # 个股分析原有 Prompt
+             system_prompt = f"""作为风险管理委员会主席和辩论主持人，您的目标是评估三位风险分析师——激进、中性和安全/保守——之间的辩论，并确定交易员的最佳行动方案。您的决策必须产生明确的建议：买入、卖出或持有。只有在有具体论据强烈支持时才选择持有，而不是在所有方面都似乎有效时作为后备选择。力求清晰和果断。
 
 决策指导原则：
 1. **总结关键论点**：提取每位分析师的最强观点，重点关注与背景的相关性。
@@ -52,6 +109,12 @@ def create_risk_manager(llm, memory):
 ---
 
 专注于可操作的见解和持续改进。建立在过去经验教训的基础上，批判性地评估所有观点，确保每个决策都能带来更好的结果。请用中文撰写所有分析内容和建议。"""
+
+        # 根据研究深度调整 Prompt 细节
+        if research_depth in ["深度", "全面"]:
+            system_prompt += "\n\n注意：当前处于深度分析模式，请务必详细阐述风险传导路径和量化依据，不要仅给出定性结论。"
+
+        prompt = system_prompt
 
         # 📊 统计 prompt 大小
         prompt_length = len(prompt)
@@ -143,13 +206,13 @@ def create_risk_manager(llm, memory):
         new_risk_debate_state = {
             "judge_decision": response_content,
             "history": risk_debate_state["history"],
-            "risky_history": risk_debate_state["risky_history"],
-            "safe_history": risk_debate_state["safe_history"],
-            "neutral_history": risk_debate_state["neutral_history"],
+            "risky_history": risk_debate_state.get("risky_history", ""),
+            "safe_history": risk_debate_state.get("safe_history", ""),
+            "neutral_history": risk_debate_state.get("neutral_history", ""),
             "latest_speaker": "Judge",
-            "current_risky_response": risk_debate_state["current_risky_response"],
-            "current_safe_response": risk_debate_state["current_safe_response"],
-            "current_neutral_response": risk_debate_state["current_neutral_response"],
+            "current_risky_response": risk_debate_state.get("current_risky_response", ""),
+            "current_safe_response": risk_debate_state.get("current_safe_response", ""),
+            "current_neutral_response": risk_debate_state.get("current_neutral_response", ""),
             "count": risk_debate_state["count"],
         }
 
