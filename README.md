@@ -2,9 +2,8 @@
  * @Author: zhengweicheng 46236959+zwczwczwc@users.noreply.github.com
  * @Date: 2025-12-13 17:06:34
  * @LastEditors: zhengweicheng 46236959+zwczwczwc@users.noreply.github.com
- * @LastEditTime: 2025-12-27 00:26:19
+ * @LastEditTime: 2026-01-12 01:35:23
  * @FilePath: /TradingAgents-CN-Test/README.md
- * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
 -->
 # TradingAgents 中文增强版
 
@@ -20,6 +19,92 @@
 
 ---
 
+## 🏗️ Monorepo 架构与目录结构
+
+本项目已全面升级为 Monorepo 架构，实现了服务解耦与模块化管理，以支持更复杂的业务场景。
+
+### 核心目录结构
+```text
+TradingAgents-CN-Test/
+├── services/               # 后端微服务
+│   ├── stock-analysis/     # 个股分析服务 (Port: 8000)
+│   └── index-analysis/     # 指数/大盘分析服务 (Port: 8001)
+├── infrastructure/         # 基础设施配置
+│   └── docker/             # Docker Compose 与容器配置
+├── tools/                  # 工具链与脚本
+│   ├── playground/         # 实验性脚本与示例 (原 examples)
+│   ├── maintenance/        # 运维与数据库维护脚本
+│   └── build/              # 构建脚本
+├── docs/                   # 项目文档
+└── config/                 # 全局配置 (可选)
+```
+
+---
+
+## 🚀 快速开始
+
+### 前置要求
+- Python 3.10+
+- Docker & Docker Compose (推荐)
+- Tushare Token (可选，建议配置以获取更完整数据)
+
+### 方式一：Docker Compose 启动 (推荐)
+一键启动所有服务（包含 Stock Analysis, Index Analysis, MongoDB, Redis）。
+
+```bash
+# 进入 docker 配置目录
+cd infrastructure/docker
+
+# 启动所有服务
+docker-compose up --build -d
+```
+
+服务启动后：
+- **Stock Analysis Service**: http://localhost:8000
+- **Index Analysis Service**: http://localhost:8001
+- **MongoDB**: localhost:27017
+- **Redis**: localhost:6379
+
+### 方式二：本地开发启动
+
+如果你需要修改代码或调试，可以在本地分别启动服务。
+
+#### 1. 启动 Stock Analysis Service (个股分析)
+```bash
+cd services/stock-analysis/src
+
+# 安装依赖
+pip install -r ../requirements.txt
+
+# 启动服务 (默认端口 8000)
+python -m app
+```
+
+#### 2. 启动 Index Analysis Service (指数分析)
+```bash
+cd services/index-analysis/src
+
+# 安装依赖
+pip install -r ../requirements.txt
+
+# 启动服务 (指定端口 8001 以避免冲突)
+PORT=8001 python -m app
+```
+
+### 运行分析脚本
+
+所有演示和测试脚本已移动到 `tools/playground` 目录下。
+
+```bash
+# 示例：运行个股分析 (需确保后端服务已启动)
+python tools/playground/examples/run_stock_analysis.py --ticker 600519.SH
+
+# 示例：运行指数分析
+python tools/playground/examples/run_index_analysis.py --index 000300.SH
+```
+
+---
+
 ## 🚀 核心业务升级：指数级全维分析 (P0 需求)
 
 本项目在原有个股分析的基础上，进行了重大业务逻辑扩展，引入了全新的**指数/大盘分析 Workflow**，实现了从"点"（个股）到"面"（宏观市场）的跨越。
@@ -28,11 +113,11 @@
 
 1.  **专业分析团队模拟**
     *   **宏观分析师**: 深度分析GDP、CPI、PMI等宏观指标及经济周期
-    *   **政策分析师**: 解读国家战略、财政/货币政策及产业支持政策
+    *   **政策分析师**: 解读国家战略、财政/货币政策及产业支持政策（升级为战略政策分析）
     *   **板块分析师**: 分析板块资金流向、热点主题及行业轮动
-    *   **国际新闻分析师**: 监控国际舆情、地缘政治及外部冲击
+    *   **全球情报分析师 (News Analyst)**: 统一监控国际舆情、地缘政治及突发新闻
     *   **技术分析师**: 基于量化指标（MA, MACD, RSI等）进行趋势研判
-    *   **多空辩论组**: 模拟市场上多头与空头的观点博弈，挖掘潜在风险与机会
+    *   **多空辩论组**: 模拟市场上多头与空头的观点博弈，引入历史模式匹配
     *   **策略顾问**: 综合各方观点，给出最终的仓位建议、分层配置及动态调整策略
 
 2.  **并行执行架构 (Parallel Execution)**
@@ -99,59 +184,31 @@
 - **数据预验证**: 增加指数代码格式检查和数据源可用性检查
 - **风险评估层**: 引入独立的风险评估环节
 
+### v2.5.0 - 前端适配与交互优化 (Frontend Adaptation)
+**核心目标**: 实现 Web 前端对指数分析的全链路支持
+- **指数分析模式**: 支持单股/指数模式一键切换，自动适配指数代码
+- **可视化增强**: 新增多空辩论视图、风险仪表盘、结构化报告展示
+- **动态交互**: 支持前端动态选择分析师阵容，灵活配置分析深度
+
+### v2.6.0 - 流程优化与职能重构 (Workflow Optimization)
+**核心目标**: 提升分析效率与决策深度
+- **宏观缓存机制**: 引入 Macro Analysis Cache (TTL=7天)，显著降低 Token 消耗
+- **职能重构**: Policy Analyst 升级为战略政策分析，News Analyst 统一整合全球情报
+- **风控升级**: Risk Manager 转型为宏观风险委员会，聚焦系统性风险评估
+- **历史模式匹配**: 辩论环节引入历史相似案例匹配，提升博弈质量
+
+### v2.7.0 - 多服务拆分与Monorepo重构 (Monorepo & Microservices)
+**核心目标**: 提升系统可维护性与扩展性
+- **服务拆分**: 将个股分析与指数分析拆分为独立微服务
+- **目录重构**: 采用 Monorepo 结构，统一管理基础设施与工具链
+- **Docker优化**: 提供统一的 Docker Compose 编排，支持一键部署
 ---
 
-## 🎉 v1.0.0-preview 技术架构升级
 
-为了支撑更复杂的业务流程，我们将底层架构进行了全面重构，带来企业级的性能体验。
-
-### 🏗️ 全新技术架构
-- **后端升级**: 从 Streamlit 迁移到 **FastAPI**，提供更强大的 RESTful API 和异步处理能力
-- **前端重构**: 采用 **Vue 3 + Element Plus**，打造响应式、现代化的单页应用 (SPA)
-- **数据库优化**: **MongoDB + Redis** 双数据库架构，读写性能提升 10 倍，支持复杂查询与缓存
-- **容器化部署**: 完整的 Docker 多架构支持（amd64 + arm64），一键部署
-
-### 🎯 企业级功能支持
-- **用户权限管理**: 完整的用户认证、角色管理、操作日志系统
-- **配置管理中心**: 可视化的大模型配置、数据源管理、系统设置
-- **实时通知系统**: SSE + WebSocket 双通道推送，实时跟踪分析进度
-- **多数据源路由**: 统一的数据源管理，支持 Tushare、AkShare、BaoStock 自动切换
 
 ---
 
-### 🚀 快速开始
 
-#### 1. 启动后端服务
-确保已安装 Docker 和 Python 环境。
-
-```bash
-# 启动 Redis 和 MongoDB
-docker start tradingagents-redis tradingagents-mongo
-
-# 启动后端 API 服务
-python -m app.main
-```
-
-#### 2. 运行指数分析
-使用提供的脚本直接调用后端接口进行分析。
-
-```bash
-# 分析半导体指数 (H30184.CSI)
-python scripts/download_index_report.py --index 半导体 --depth 深度
-
-# 快速分析模式
-python scripts/download_index_report.py --index 沪深300 --depth 快速
-
-# 自定义分析模块
-python scripts/download_index_report.py --index 创业板 --analysts macro,technical --depth 标准
-```
-
-#### 3. 查看报告
-分析完成后，报告将自动保存为 PDF 和 Markdown 格式，通常位于项目根目录下。
-
-⚠️ **重要提醒**: 在分析股票之前，请按相关文档要求，将股票数据同步完成，否则分析结果将会出现数据错误。
-
----
 
 ## 📚 核心功能使用指南
 

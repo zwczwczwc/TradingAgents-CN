@@ -1,0 +1,113 @@
+# TradingAgents/graph/propagation.py
+
+from typing import Dict, Any
+
+# 导入统一日志系统
+from tradingagents.utils.logging_init import get_logger
+logger = get_logger("default")
+from tradingagents.agents.utils.agent_states import (
+    AgentState,
+    InvestDebateState,
+    RiskDebateState,
+)
+
+
+class Propagator:
+    """Handles state initialization and propagation through the graph."""
+
+    def __init__(self, max_recur_limit=100, analysis_type="stock"):
+        """Initialize with configuration parameters.
+        
+        Args:
+            max_recur_limit: Maximum recursion limit for the graph
+            analysis_type: "stock" for individual stock analysis, "index" for index analysis
+        """
+        self.max_recur_limit = max_recur_limit
+        self.analysis_type = analysis_type
+
+    def create_initial_state(
+        self, company_name: str, trade_date: str, research_depth: str = "标准", selected_analysts: list[str] = None, market_type: str = "A股"
+    ) -> Dict[str, Any]:
+        """Create the initial state for the agent graph."""
+        from langchain_core.messages import HumanMessage
+
+        # 🔥 修复：创建明确的分析请求消息，而不是只传递股票代码
+        # 这样可以确保所有LLM（包括DeepSeek）都能理解任务
+        analysis_request = f"请对股票 {company_name} ({market_type}) 进行全面分析，交易日期为 {trade_date}。研究深度: {research_depth}。"
+
+        # 基础状态(所有分析类型通用)
+        base_state = {
+            "messages": [HumanMessage(content=analysis_request)],
+            "company_of_interest": company_name,
+            "trade_date": str(trade_date),
+            "research_depth": research_depth, # ✅ Add research_depth to state
+            "market_type": market_type,
+            "is_index": self.analysis_type == "index",  # ⭐ 设置分析类型标志
+            "selected_analysts": selected_analysts or [],
+        }
+
+        # 个股分析专用字段
+        if self.analysis_type == "stock":
+            base_state.update({
+                "investment_debate_state": InvestDebateState(
+                    {"history": "", "current_response": "", "count": 0}
+                ),
+                "risk_debate_state": RiskDebateState(
+                    {
+                        "history": "",
+                        "current_risky_response": "",
+                        "current_safe_response": "",
+                        "current_neutral_response": "",
+                        "count": 0,
+                    }
+                ),
+                "market_report": "",
+                "fundamentals_report": "",
+                "sentiment_report": "",
+                "news_report": "",
+            })
+        # 指数分析专用字段
+        elif self.analysis_type == "index":
+            base_state.update({
+                "macro_report": "",
+                "policy_report": "",
+                "sector_report": "",
+                "strategy_report": "",
+                "macro_tool_call_count": 0,
+                "policy_tool_call_count": 0,
+                "sector_tool_call_count": 0,
+                "strategy_tool_call_count": 0,
+                # 初始化辩论状态
+                "investment_debate_state": InvestDebateState(
+                    {"history": "", "current_response": "", "count": 0}
+                ),
+                "risk_debate_state": RiskDebateState(
+                    {
+                        "history": "",
+                        "current_risky_response": "",
+                        "current_safe_response": "",
+                        "current_neutral_response": "",
+                        "latest_speaker": "",
+                        "judge_decision": "",
+                        "count": 0,
+                    }
+                ),
+            })
+        
+        return base_state
+
+    def get_graph_args(self, use_progress_callback: bool = False) -> Dict[str, Any]:
+        """Get arguments for the graph invocation.
+
+        Args:
+            use_progress_callback: If True, use 'updates' mode for node-level progress tracking.
+                                  If False, use 'values' mode for complete state updates.
+        """
+        # 使用 'updates' 模式可以获取节点级别的更新，用于进度跟踪
+        # 使用 'values' 模式可以获取完整的状态更新
+        stream_mode = "updates" if use_progress_callback else "values"
+
+        return {
+            "stream_mode": stream_mode,
+            "config": {"recursion_limit": self.max_recur_limit},
+        }
